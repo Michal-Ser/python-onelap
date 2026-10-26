@@ -42,8 +42,14 @@ class TestAuth(Base):
         self.assertEqual(len(self.changes), 1)
 
     def test_wrong_password(self):
-        with self.assertRaises(AuthError):
+        with self.assertRaises(AuthError) as cm:
             self.client().login(ACCOUNT, "nope")
+        e = cm.exception
+        self.assertEqual((e.status, e.code, e.server_message),
+                         (200, 400, "bad login"))
+        self.assertIn("code=400", str(e))
+        self.assertIn("bad login", str(e))
+        self.assertNotIn("nope", str(e))
         self.assertEqual(self.changes, [])
 
     def test_restore_session_without_login(self):
@@ -67,8 +73,11 @@ class TestAuth(Base):
         c = self.client(session=self.logged_in_session())
         self.fake.expire_all()
         before = self.fake.logins
-        with self.assertRaises(SessionExpired):
+        with self.assertRaises(SessionExpired) as cm:
             list(c.iter_activities())
+        e = cm.exception
+        self.assertEqual((e.status, e.code, e.server_message),
+                         (200, 401, "token expired"))
         self.assertEqual(self.fake.logins, before)
 
     def test_second_expiry_does_not_log_in_again(self):
@@ -184,8 +193,9 @@ class TestRetries(Base):
     def test_429_always(self):
         c = self.client(session=self.logged_in_session())
         self.fake.always_429 = True
-        with self.assertRaises(RateLimited):
+        with self.assertRaises(RateLimited) as cm:
             list(c.iter_activities())
+        self.assertEqual(cm.exception.status, 429)
         self.assertEqual(self.fake.list_hits, 3)
 
     def test_5xx_error_is_sanitized(self):
@@ -199,6 +209,31 @@ class TestRetries(Base):
         self.assertEqual(e.status, 500)
         self.assertLessEqual(len(e.snippet), 200)
         self.assertNotIn(session["token"], str(e))
+
+
+class TestApiErrorDetails(Base):
+    def test_unexpected_code_carries_server_details(self):
+        c = self.client(session=self.logged_in_session())
+        self.fake.reject_list = (200, {"code": 500, "msg": "db down"})
+        with self.assertRaises(ApiError) as cm:
+            list(c.iter_activities())
+        e = cm.exception
+        self.assertEqual((e.status, e.code, e.server_message),
+                         (200, 500, "db down"))
+        self.assertIn("db down", str(e))
+
+    def test_probe_reports_server_details(self):
+        env = {"ONELAP_USER": ACCOUNT, "ONELAP_PASSWORD": "wrong",
+               "ONELAP_SIGN_KEY": SIGN_KEY}
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ, env), \
+                contextlib.redirect_stdout(buf):
+            rc = probe_main.main(["probe", "--base-url", self.fake.url])
+        out = buf.getvalue()
+        self.assertEqual(rc, 1)
+        self.assertIn("PROBE FAILED: AuthError", out)
+        self.assertIn("code=400", out)
+        self.assertIn("bad login", out)
 
 
 class TestNoSecretsLeak(Base):
