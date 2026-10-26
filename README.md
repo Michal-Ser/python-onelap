@@ -21,14 +21,15 @@ pip install https://github.com/Michal-Ser/python-onelap/archive/refs/tags/v0.1.0
 
 Every request is signed with an MD5 over a constant that ships inside the
 OneLap app (`BuildConfig.ApiKey`). **This repository does not contain it.**
-Pass it as `sign_key=` (see the *OneLapFit* protocol notes in the project
-linked below, which publishes it). Keep it in your config, not in code.
+Pass it as `sign_key=`. Community projects such as the one linked below
+embed it in their source; where to obtain it is up to you. Keep it in your
+config, not in code.
 
 ## Usage
 
 ```python
 import json
-from onelap import OneLap, SessionExpired, RateLimited, NotFitError
+from onelap import OneLap, AuthError, SessionExpired, RateLimited
 
 def save(session):                      # you decide where it lives
     json.dump(session, open("/var/lib/me/onelap.json", "w"))
