@@ -36,6 +36,7 @@ class FakeOneLap:
         self.list_hits = 0
         self.download_html = False
         self.server_error_body = None
+        self.reject_list = None         # (http status, json) for valid calls
         self._n = 0
         self._srv = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.url = "http://127.0.0.1:%d" % self._srv.server_address[1]
@@ -133,6 +134,8 @@ class FakeOneLap:
                     return self._expired()
                 if not self._sign_ok(parts):
                     return self._send(200, {"code": 400, "msg": "bad sign"})
+                if fake.reject_list:
+                    return self._send(*fake.reject_list)
                 q = dict(parse_qsl(parts.query))
                 page = int(q.get("p", "1"))
                 fake.list_pages.append(page)

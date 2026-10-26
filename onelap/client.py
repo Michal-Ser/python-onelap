@@ -56,6 +56,11 @@ _URL_QUERY_RE = re.compile(r"(https?://[^\s\"'<>?]*)\?[^\s\"'<>]*")
 class _Expired(Exception):
     """Internal: the server did not accept the session."""
 
+    def __init__(self, status=None, code=None, msg=None, snippet=""):
+        super().__init__()
+        self.info = {"status": status, "code": code, "server_message": msg,
+                     "snippet": snippet}
+
 
 @dataclass(frozen=True)
 class Activity:
@@ -192,14 +197,17 @@ class OneLap:
             raise ApiError("login returned non-JSON", status,
                            self._snippet(raw, secrets))
         if payload.get("code") != 200:
-            raise AuthError("login rejected (code %r)" % payload.get("code"))
+            raise AuthError("login rejected", status,
+                            self._snippet(raw, secrets), payload.get("code"),
+                            self._server_message(payload, secrets))
         data = payload.get("data")
         token = data.get("token") if isinstance(data, dict) else None
         info = data.get("userinfo") if isinstance(data, dict) else None
         uid = info.get("uid") if isinstance(info, dict) else None
         if not token or uid in (None, ""):
             raise ApiError("login response lacks token/uid", status,
-                           self._snippet(raw, (pw_md5,)))
+                           self._snippet(raw, secrets), payload.get("code"),
+                           self._server_message(payload, secrets))
         self._session = {"token": str(token), "uid": str(uid),
                          "region": str(data.get("region") or "1")}
         log.debug("logged in")
@@ -222,6 +230,16 @@ class OneLap:
         for s in self._secrets(extra):
             text = text.replace(s, "<redacted>")
         return " ".join(text.split())[:200]
+
+    def _server_message(self, payload, extra=()):
+        for k in ("msg", "message", "error", "errmsg"):
+            v = payload.get(k)
+            if isinstance(v, str) and v:
+                text = _scrub_urls(v)
+                for s in self._secrets(extra):
+                    text = text.replace(s, "<redacted>")
+                return " ".join(text.split())[:200]
+        return None
 
     def _signed_headers(self, path, params, token, uid, region):
         nonce = base64.b64encode(os.urandom(6)).decode()
@@ -288,7 +306,8 @@ class OneLap:
             raise NetworkError("request failed: %s" % last[1])
         status, data = last[1], last[2]
         if status == 429:
-            raise RateLimited("rate limited after %d attempts" % self.retries)
+            raise RateLimited("rate limited after %d attempts" % self.retries,
+                              status, self._snippet(data, secrets))
         raise ApiError("server error", status, self._snippet(data, secrets))
 
     def _json(self, status, raw, secrets=()):
@@ -304,10 +323,11 @@ class OneLap:
             return
         self._auto_login()
 
-    def _auto_login(self):
+    def _auto_login(self, rejected=None):
         if self._auto_login_used or not self._account:
-            raise SessionExpired("session missing or expired and cannot be "
-                                 "renewed")
+            raise SessionExpired(
+                "session missing or expired and cannot be renewed",
+                **(rejected.info if rejected else {}))
         self._auto_login_used = True
         account, pw = self._account, self._pw_md5
         self._account = self._pw_md5 = None
@@ -321,32 +341,32 @@ class OneLap:
         if params:
             url += "?" + urllib.parse.urlencode(params)
         status, raw = self._http("GET", url, headers)
-        if status in EXPIRED_STATUSES:
-            raise _Expired()
         payload = self._json(status, raw)
-        if payload is None:
-            # HTML login page or other non-JSON body on a JSON endpoint.
-            raise _Expired()
-        code = payload.get("code")
-        if code in EXPIRED_CODES:
-            raise _Expired()
+        code = payload.get("code") if payload else None
+        msg = self._server_message(payload) if payload else None
+        if status in EXPIRED_STATUSES or payload is None \
+                or code in EXPIRED_CODES:
+            # Also covers an HTML login page or other non-JSON body.
+            raise _Expired(status, code, msg, self._snippet(raw))
         if status != 200 or code != 200:
-            raise ApiError("unexpected response", status, self._snippet(raw))
+            raise ApiError("unexpected response", status, self._snippet(raw),
+                           code, msg)
         return payload
 
     def _api(self, path, params):
         self._ensure_session()
         try:
             return self._api_once(path, params)
-        except _Expired:
+        except _Expired as first:
             log.debug("session rejected")
+            rejected = first
         self._session = None
-        self._auto_login()
+        self._auto_login(rejected)
         try:
             return self._api_once(path, params)
-        except _Expired:
-            raise SessionExpired("session rejected right after login") \
-                from None
+        except _Expired as again:
+            raise SessionExpired("session rejected right after login",
+                                 **again.info) from None
 
     # --------------------------------------------------------- activities
     def iter_activities(self, since=None, until=None):

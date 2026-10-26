@@ -70,8 +70,15 @@ else (e.g. an HTML error page) raises `NotFitError`.
 | `SessionExpired` | session rejected and cannot/may not be renewed | human needed |
 | `RateLimited` | HTTP 429 after 3 attempts | try later |
 | `NetworkError` | transport failure after 3 attempts | try later |
-| `ApiError` | unexpected status/shape; has `status`, `snippet` (≤200 chars, scrubbed) | API changed, report |
+| `ApiError` | unexpected status/shape | API changed, report |
 | `NotFitError` | downloaded file is not FIT | that ride only |
+
+Every exception also carries what the server said, whenever there was a
+response: `status` (HTTP status), `code` (the `code` field of the JSON body),
+`server_message` (its `msg`/`message`) and `snippet` (scrubbed start of the
+body, ≤200 chars); all are `None`/empty otherwise. `str(e)` includes them, e.g.
+`login rejected http=200 code=400 server says: bad login`. Secrets are always
+redacted from these fields.
 
 Session handling: the stored session is always tried first. If it is rejected
 and credentials were given, **one** re-login happens per instance (then the

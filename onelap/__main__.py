@@ -12,7 +12,7 @@ import re
 import sys
 from datetime import datetime, timedelta, timezone
 
-from . import ApiError, OneLap, OneLapError
+from . import OneLap, OneLapError
 from .client import DEFAULT_BASE_URL, LIST_PATH
 
 _SAFE_STR = re.compile(r"^[^/=?&:]{0,40}$")
@@ -137,10 +137,9 @@ def _probe(args):
         out("\nPROBE OK")
         return 0
     except OneLapError as e:
-        extra = ""
-        if isinstance(e, ApiError):
-            extra = " status=%s snippet=%r" % (e.status, e.snippet)
-        out("\nPROBE FAILED: %s%s" % (type(e).__name__, extra))
+        out("\nPROBE FAILED: %s: %s" % (type(e).__name__, e))
+        out("  http status=%s code=%s server_message=%r snippet=%r"
+            % (e.status, e.code, e.server_message, e.snippet))
         return 1
     except Exception as e:  # keep the report copy-pasteable
         out("\nPROBE FAILED: %s" % type(e).__name__)
